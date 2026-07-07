@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Core/RefPtr.h"
-#include "Core/Types.h"
+#include "GBTCore/RefPtr.h"
+#include "GBTCore/Types.h"
 
 #include <functional>
 #include <optional>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Core/RefCounted.h"
+#include "GBTCore/RefCounted.h"
 
 namespace GBT
 {
