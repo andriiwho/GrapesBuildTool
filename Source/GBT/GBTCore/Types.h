@@ -18,10 +18,6 @@ using SInt64 = int64_t;
 using USize = std::size_t;
 using SSize = std::ptrdiff_t;
 
-enum class Byte : UInt8
-{
-};
-
 using Char = char;
 using WideChar = wchar_t;
 
@@ -51,6 +47,10 @@ using WideStringView = std::wstring_view;
 
 namespace GBT
 {
+    enum class Byte : UInt8
+    {
+    };
+
     template <typename T, typename Deleter = std::default_delete<T>>
     using OwnedPtr = std::unique_ptr<T, Deleter>;
 
