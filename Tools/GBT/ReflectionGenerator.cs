@@ -48,8 +48,8 @@ internal static partial class ReflectionGenerator
         }
 
         WriteFileIfChanged(Path.Combine(reflectionDir, "AllReflection.gen.cpp"), GenerateAllSource(reflectedTypes, reflectedEnums));
-        var reflectionModule = modules.FirstOrDefault(module => module.Name == "GBT")
-            ?? modules.FirstOrDefault(module => module.Name == "Core");
+        var reflectionModule = modules.FirstOrDefault(module => module.Name == "Core")
+            ?? modules.FirstOrDefault(module => module.Name == "GBT");
         reflectionModule?.GeneratedSources.Add(Path.Combine(reflectionDir, "AllReflection.gen.cpp"));
 
         Console.WriteLine($"[GBT] generated reflection metadata ({reflectedTypes.Count} types, {reflectedEnums.Count} enums)");
