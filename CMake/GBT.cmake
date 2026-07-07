@@ -85,10 +85,6 @@ function(GBT_GenerateProject)
     GBT_AddCompileCommandsCopyTarget()
 endfunction()
 
-function(GBP_GenerateProject)
-    GBT_GenerateProject()
-endfunction()
-
 function(GBT_IncludeGeneratedModules)
     if(NOT EXISTS "${GBT_GeneratedModulesFile}")
         message(FATAL_ERROR
