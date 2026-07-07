@@ -17,5 +17,6 @@
         <Compile Include="../../Games/**/*.GBTModule.cs" Link="Modules/Games/%(RecursiveDir)%(Filename)%(Extension)" />
         <Compile Include="../../../../Source/**/*.GBTModule.cs" Link="ClientModules/Source/%(RecursiveDir)%(Filename)%(Extension)" />
         <Compile Include="../../../../Games/**/*.GBTModule.cs" Link="ClientModules/Games/%(RecursiveDir)%(Filename)%(Extension)" />
+        <Compile Include="../../../../Shaders/**/*.GBTModule.cs" Link="ClientModules/Shaders/%(RecursiveDir)%(Filename)%(Extension)" />
     </ItemGroup>
 </Project>

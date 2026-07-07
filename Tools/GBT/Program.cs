@@ -81,6 +81,7 @@ static List<BuildModule> DiscoverModules(string sourceRoot, string outputDir, Mo
         {
             Path.Combine(sourceRoot, "Source"),
             Path.Combine(sourceRoot, "Games"),
+            Path.Combine(sourceRoot, "Shaders"),
             Path.Combine(CommandLineOptions.CurrentToolRoot, "Source")
         }
         .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
