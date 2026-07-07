@@ -1,0 +1,59 @@
+{
+    "version": 9,
+    "configurePresets": [
+        {
+            "name": "gbt-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/Out/${presetName}/Build",
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/Tools/GrapesBuildTool/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+                "CMAKE_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/Out/${presetName}/Binaries",
+                "CMAKE_LIBRARY_OUTPUT_DIRECTORY": "${sourceDir}/Out/${presetName}/Binaries",
+                "CMAKE_ARCHIVE_OUTPUT_DIRECTORY": "${sourceDir}/Out/${presetName}/Libraries"
+            }
+        },
+        {
+            "name": "gbt-debug",
+            "hidden": true,
+            "inherits": [ "gbt-base" ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "gbt-release",
+            "hidden": true,
+            "inherits": [ "gbt-base" ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "gbt-development",
+            "hidden": true,
+            "inherits": [ "gbt-base" ],
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "gbt-debug",
+            "hidden": true,
+            "configurePreset": "gbt-debug"
+        },
+        {
+            "name": "gbt-release",
+            "hidden": true,
+            "configurePreset": "gbt-release"
+        },
+        {
+            "name": "gbt-development",
+            "hidden": true,
+            "configurePreset": "gbt-development"
+        }
+    ]
+}
