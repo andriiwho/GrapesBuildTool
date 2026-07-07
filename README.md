@@ -67,6 +67,23 @@ public sealed class Core : Module
 }
 ```
 
+Module target aliases default to the CMake project namespace. For
+`project(MyProject)`, the module above is exported as `MyProject::Core`. A
+module can override that namespace when it needs to publish under another target
+namespace:
+
+```csharp
+using GBT.BuildTool;
+
+public sealed class Core : Module
+{
+    public Core()
+    {
+        Namespace = "Engine";
+    }
+}
+```
+
 ## Reflection Macros
 
 Use `GBT_Type`, `GBT_Enum`, `GBT_Field`, `GBT_Method`, and

@@ -61,6 +61,7 @@ public sealed class ExternalDependency
 public abstract class Module
 {
     public virtual string Name => GetType().Name;
+    public string Namespace { get; protected set; } = "";
     public string SourceFile { get; private set; } = "";
     public string ModuleDirectory { get; private set; } = "";
     public ModuleKind Kind { get; protected set; } = ModuleKind.Static;

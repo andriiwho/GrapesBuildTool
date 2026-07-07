@@ -178,12 +178,25 @@ endfunction()
 function(GBT_AddModuleImpl ModuleName ModuleDir)
     cmake_parse_arguments(ARG
             ""
-            "KIND"
+            "KIND;NAMESPACE"
             "PUBLIC_LINKS;PRIVATE_LINKS;INTERFACE_LINKS;PUBLIC_DEFINITIONS;PRIVATE_DEFINITIONS;INTERFACE_DEFINITIONS;PUBLIC_INCLUDES;PRIVATE_INCLUDES;INTERFACE_INCLUDES;EXTERNAL_DEPENDENCIES;GENERATED_SOURCES;PCH"
             ${ARGN}
     )
 
     GBT_RequirePascalCase("${ModuleName}" "GBT_AddModule module name")
+
+    if(NOT ARG_NAMESPACE)
+        set(ARG_NAMESPACE "${PROJECT_NAME}")
+    endif()
+
+    if(NOT "${ARG_NAMESPACE}" MATCHES "^[A-Z][A-Za-z0-9]*(::[A-Z][A-Za-z0-9]*)*$")
+        message(FATAL_ERROR
+                "[GBT] GBT_AddModule('${ModuleName}'): invalid NAMESPACE '${ARG_NAMESPACE}'. "
+                "Use PascalCase CMake target namespace syntax such as '${PROJECT_NAME}' or 'Company::Engine'."
+        )
+    endif()
+
+    string(REPLACE "::" "" TargetNamespaceStem "${ARG_NAMESPACE}")
 
     if(NOT ARG_KIND)
         set(ARG_KIND "static")
@@ -214,7 +227,7 @@ function(GBT_AddModuleImpl ModuleName ModuleDir)
         endforeach()
     endif()
 
-    set(TargetName "${PROJECT_NAME}${ModuleName}")
+    set(TargetName "${TargetNamespaceStem}${ModuleName}")
     GBT_RequirePascalCase("${TargetName}" "GBT target name")
 
     set(Sources "")
@@ -262,7 +275,7 @@ function(GBT_AddModuleImpl ModuleName ModuleDir)
     endif()
 
     if(NOT Kind STREQUAL "executable")
-        add_library(${PROJECT_NAME}::${ModuleName} ALIAS ${TargetName})
+        add_library(${ARG_NAMESPACE}::${ModuleName} ALIAS ${TargetName})
     endif()
 
     if(Kind STREQUAL "interface")
@@ -298,7 +311,7 @@ function(GBT_AddModuleImpl ModuleName ModuleDir)
         endif()
     endif()
 
-    message(STATUS "[GBT] module registered: ${PROJECT_NAME}::${ModuleName} [${Kind}]")
+    message(STATUS "[GBT] module registered: ${ARG_NAMESPACE}::${ModuleName} [${Kind}]")
 endfunction()
 
 function(GBT_AddModuleFromDir ModuleName ModuleDir)
@@ -312,6 +325,7 @@ endfunction()
 # static by default and may not be declared as shared/module libraries.
 #
 # Optional list arguments:
+#   NAMESPACE (CMake target namespace, defaults to PROJECT_NAME)
 #   PUBLIC_LINKS / PRIVATE_LINKS / INTERFACE_LINKS
 #   PUBLIC_DEFINITIONS / PRIVATE_DEFINITIONS / INTERFACE_DEFINITIONS
 #   PUBLIC_INCLUDES / PRIVATE_INCLUDES / INTERFACE_INCLUDES

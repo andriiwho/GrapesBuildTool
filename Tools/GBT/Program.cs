@@ -230,6 +230,11 @@ static void GenerateCMake(string sourceRoot, string outputDir, IReadOnlyCollecti
         builder.AppendLine();
         builder.Append("    KIND ");
         builder.AppendLine(CMakeEscape(ToCMakeKind(grapesModule.Kind)));
+        if (!string.IsNullOrWhiteSpace(grapesModule.Namespace))
+        {
+            builder.Append("    NAMESPACE ");
+            builder.AppendLine(CMakeEscape(grapesModule.Namespace));
+        }
         AppendList(builder, "PUBLIC_LINKS", grapesModule.PublicLinks);
         AppendList(builder, "PRIVATE_LINKS", grapesModule.PrivateLinks);
         AppendList(builder, "INTERFACE_LINKS", grapesModule.InterfaceLinks);
