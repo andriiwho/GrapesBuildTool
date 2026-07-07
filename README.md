@@ -210,7 +210,7 @@ Use the macros from `Object/ReflectionMacros.h`.
 
 #include <string>
 
-#include "Core.gen.h"
+#include "Core/Version.gen.h"
 
 namespace MyProject
 {
@@ -234,17 +234,22 @@ namespace MyProject
 }
 ```
 
-The generated header is named after the module. If this type lives in the
-`Core` module, the generated header is `Core.gen.h`.
-`GBT_TypeMetadata()` expands through that header and adds the type functions
-needed by the reflection runtime. The generated files are written under the
-build directory; do not edit them.
+The generated metadata header follows the source path inside the module. If
+this type lives in `Source/Core/Core/Version.h` and the module root is
+`Source/Core`, the generated include is `Core/Version.gen.h`.
+`GBT_TypeMetadata()` expands through that per-source header and adds the type
+functions needed by the reflection runtime.
+
+GBT also writes a module-level header such as `Core.gen.h`. That file is used
+by generated module registration code; reflected source headers should include
+their own `ModuleRelativePath/FileName.gen.h` file instead. The generated files
+are written under the build directory; do not edit them.
 
 Enums can be reflected too:
 
 ```cpp
 #include "Object/ReflectionMacros.h"
-#include "Core.gen.h"
+#include "Core/Axis.gen.h"
 
 namespace MyProject
 {
@@ -312,7 +317,7 @@ mark object types and create default-constructible instances:
 
 #include <string>
 
-#include "Core.gen.h"
+#include "Core/TextureAsset.gen.h"
 
 namespace MyProject
 {
