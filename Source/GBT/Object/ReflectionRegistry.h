@@ -58,6 +58,7 @@ namespace GBT
 
     using FieldAddressGetter = std::function<const void*(const void*)>;
     using FieldMutableAddressGetter = std::function<void*(void*)>;
+    using EnumValueSetter = std::function<void(void*, SInt64)>;
     using MethodInvoker = std::function<void(void*, void*, std::span<void*>)>;
     using ObjectFactory = std::function<RefPtr<Object>()>;
 
@@ -88,10 +89,15 @@ namespace GBT
     {
         String Name;
         String TypeName;
+        // Native type identity lets generic data-driven systems safely distinguish
+        // aliases, containers, enums, and reflected value types at runtime.
+        std::type_index TypeId = typeid(void);
         FieldFlags Flags = FieldFlags::None;
         std::vector<MetadataEntry> Metadata;
         FieldAddressGetter AddressGetter;
         FieldMutableAddressGetter MutableAddressGetter;
+        // Present only for enum fields; writes a reflected integral enum value.
+        EnumValueSetter SetEnumValue;
 
         const void* GetAddress(const void* Instance) const
         {
@@ -118,6 +124,19 @@ namespace GBT
         bool CanRead() const { return static_cast<bool>(AddressGetter); }
         bool CanWrite() const { return static_cast<bool>(MutableAddressGetter); }
     };
+
+    template <typename T>
+    EnumValueSetter MakeEnumValueSetter()
+    {
+        if constexpr (std::is_enum_v<T>)
+        {
+            return [](void* Address, SInt64 Value)
+            {
+                *static_cast<T*>(Address) = static_cast<T>(Value);
+            };
+        }
+        return {};
+    }
 
     struct MethodInfo
     {
