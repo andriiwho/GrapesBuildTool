@@ -58,14 +58,19 @@ public sealed class ExternalDependency
     }
 }
 
-public abstract class Module
+public sealed class Module
 {
-    public virtual string Name => GetType().Name;
-    public string Namespace { get; protected set; } = "";
+    internal Module(string name)
+    {
+        Name = name;
+    }
+
+    public string Name { get; }
+    public string Namespace { get; internal set; } = "";
     public string SourceFile { get; private set; } = "";
     public string ModuleDirectory { get; private set; } = "";
-    public ModuleKind Kind { get; protected set; } = ModuleKind.Static;
-    public ModulePlatforms Platforms { get; protected set; } = ModulePlatforms.All;
+    public ModuleKind Kind { get; internal set; } = ModuleKind.Static;
+    public ModulePlatforms Platforms { get; internal set; } = ModulePlatforms.All;
 
     public List<ExternalDependency> ExternalDependencies { get; } = [];
     public List<PackageReference> FindPackages { get; } = [];
@@ -79,7 +84,7 @@ public abstract class Module
     public List<string> PrivateIncludes { get; } = [];
     public List<string> InterfaceIncludes { get; } = [];
     public List<string> GeneratedSources { get; } = [];
-    public string? Pch { get; protected set; }
+    public string? Pch { get; internal set; }
 
     public bool IsEnabled(ModulePlatforms currentPlatform)
     {

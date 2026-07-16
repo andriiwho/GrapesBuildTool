@@ -1,7 +1,7 @@
 # GBT
 
-GBT is a small CMake/C# build layer for C++ projects. It describes project
-modules in C#, generates CMake targets, writes the vcpkg manifest used by the
+GBT is a small CMake/.NET build layer for C++ projects. It describes project
+modules in TOML, generates CMake targets, writes the vcpkg manifest used by the
 build, and generates a simple reflection database for annotated C++ types.
 
 It is intentionally boring to integrate: include one CMake file before
@@ -73,23 +73,30 @@ Then a client preset can inherit from GBT's hidden presets:
 
 ## Modules
 
-A module is a C# file named `Name.GBTModule.cs` under the client project's
-`Source/` or `Games/` directory, or under GBT's own `Source/` directory.
+A project declares module search roots in `GBTProject.toml`:
 
-The class normally has the same name as the file:
+```toml
+SchemaVersion = 1
 
-```csharp
-using GBT.BuildTool;
+[Project]
+Name = "MyProject"
+ModuleRoots = ["Source", "Games", "External/GBT/Source"]
+```
 
-public sealed class Core : Module
-{
-    public Core()
-    {
-        ExternalDependencies.Add("spdlog");
-        FindPackages.Add(new PackageReference("spdlog"));
-        PublicLinks.Add("spdlog::spdlog");
-    }
-}
+Each module is a `Name.GBTModule.toml` file below one of those roots. Its
+directory owns the module's discovered source and header files:
+
+```toml
+SchemaVersion = 1
+
+[Module]
+Name = "Core"
+
+[[Dependency]]
+Name = "spdlog"
+Package = "spdlog"
+Target = "spdlog::spdlog"
+Visibility = "Public"
 ```
 
 For `project(MyProject)`, that module becomes the target alias
@@ -98,90 +105,80 @@ For `project(MyProject)`, that module becomes the target alias
 Static library modules are the default. Executables and interface-only modules
 are explicit:
 
-```csharp
-using GBT.BuildTool;
+```toml
+[Module]
+Name = "App"
+Kind = "Executable"
 
-public sealed class App : Module
-{
-    public App()
-    {
-        Kind = ModuleKind.Executable;
-
-        PrivateLinks.Add("MyProject::Core");
-    }
-}
+[Links]
+Private = ["MyProject::Core"]
 ```
 
-```csharp
-using GBT.BuildTool;
+```toml
+[Module]
+Name = "Launch"
+Kind = "Interface"
 
-public sealed class Launch : Module
-{
-    public Launch()
-    {
-        Kind = ModuleKind.Interface;
-
-        InterfaceLinks.Add("MyProject::Core");
-    }
-}
+[Links]
+Interface = ["MyProject::Core"]
 ```
 
 Target aliases default to the CMake project namespace. A module can publish
 under another namespace when that is useful:
 
-```csharp
-using GBT.BuildTool;
-
-public sealed class Core : Module
-{
-    public Core()
-    {
-        Namespace = "Engine";
-    }
-}
+```toml
+[Module]
+Name = "Core"
+Namespace = "Engine"
 ```
 
 That module is exported as `Engine::Core` instead of `MyProject::Core`.
 
-Platform filters use `ModulePlatforms`:
+Platform filters use a strict list of `Windows`, `Mac`, `Linux`, `Android`,
+`Emscripten`, `Ios`, `Desktop`, or `All`:
 
-```csharp
-using GBT.BuildTool;
+```toml
+[Module]
+Name = "RenderDeviceSDL"
+Platforms = ["Desktop"]
 
-public sealed class RenderDeviceSDL : Module
-{
-    public RenderDeviceSDL()
-    {
-        Platforms = ModulePlatforms.Desktop;
+[Links]
+Public = ["MyProject::RenderDevice"]
 
-        PublicLinks.Add("MyProject::RenderDevice");
-        ExternalDependencies.Add(new ExternalDependency("sdl3", "vulkan"));
-        FindPackages.Add(new PackageReference("SDL3"));
-        PrivateLinks.Add("SDL3::SDL3");
-    }
-}
+[[Dependency]]
+Name = "sdl3"
+Features = ["vulkan"]
+Package = "SDL3"
+Target = "SDL3::SDL3"
+Visibility = "Private"
 ```
 
 Common module properties:
 
-```csharp
-PublicLinks.Add("MyProject::Core");
-PrivateLinks.Add("some_private_target");
-InterfaceLinks.Add("header_only_target");
+```toml
+[Links]
+Public = ["MyProject::Core"]
+Private = ["some_private_target"]
+Interface = ["header_only_target"]
 
-PublicDefinitions.Add("MYPROJECT_PUBLIC=1");
-PrivateDefinitions.Add("MYPROJECT_PRIVATE=1");
-InterfaceDefinitions.Add("MYPROJECT_HEADER_ONLY=1");
+[Definitions]
+Public = ["MYPROJECT_PUBLIC=1"]
+Private = ["MYPROJECT_PRIVATE=1"]
+Interface = ["MYPROJECT_HEADER_ONLY=1"]
 
-PublicIncludes.Add("/absolute/or/generated/include/path");
-PrivateIncludes.Add("/private/include/path");
-InterfaceIncludes.Add("/interface/include/path");
+[Includes]
+Public = ["Public"]
+Private = ["Private"]
+Interface = ["Generated"]
 
-ExternalDependencies.Add("fmt");
-ExternalDependencies.Add(new ExternalDependency("imgui", "docking-experimental"));
-
-FindPackages.Add(new PackageReference("fmt"));
-FindPackages.Add(new PackageReference("imgui") { Config = true, Required = true });
+[[Dependency]]
+Name = "imgui"
+Features = ["docking-experimental"]
+Package = "imgui"
+Target = "imgui::imgui"
+Visibility = "Public"
+Config = true
+Required = true
 ```
 
 ## Reflection
@@ -189,16 +186,12 @@ FindPackages.Add(new PackageReference("imgui") { Config = true, Required = true 
 GBT ships a small C++ runtime module named `GBT`. Link it from whichever module
 needs object/reflection types:
 
-```csharp
-using GBT.BuildTool;
+```toml
+[Module]
+Name = "Core"
 
-public sealed class Core : Module
-{
-    public Core()
-    {
-        PublicLinks.Add("MyProject::GBT");
-    }
-}
+[Links]
+Public = ["MyProject::GBT"]
 ```
 
 Use the macros from `Object/ReflectionMacros.h`.
@@ -307,6 +300,30 @@ If you use an engine launch layer, put the call there rather than in every
 game/application executable. The generated registrar lives in one of the
 generated reflection sources and registers every reflected type and enum found
 in enabled modules.
+
+## Reflection Reliability And Runtime Types
+
+Reflected member declarations are scanned with balanced delimiter and quoted
+literal tracking. Aggregate initializers, nested templates, multiline members,
+and lambdas therefore do not hide annotated fields. An annotation that cannot
+be consumed as one complete declaration stops generation with a file and line
+diagnostic instead of silently omitting metadata.
+
+Each generated field exposes a `ValueTypeInfo` classification (`Primitive`,
+`Enum`, `Reflected`, or `Sequence`). Sequence metadata provides size, resize,
+element type, and element-address operations. Proxy containers such as
+`std::vector<bool>` deliberately omit unsafe element-address operations.
+
+Qualified names are always authoritative. If multiple registered types or
+enums share an unqualified name, `FindTypeByName` or `FindEnumByName` returns
+null and callers must use the qualified name. Generated sources also carry a
+reflection ABI assertion; stale metadata fails compilation or registration.
+
+Run the dependency-free generator regression suite with:
+
+```sh
+dotnet run --project Tools/GBT/GBT.csproj -- --mode self-test
+```
 
 For reflected classes that inherit from `GBT::Object`, the registry can also
 mark object types and create default-constructible instances:

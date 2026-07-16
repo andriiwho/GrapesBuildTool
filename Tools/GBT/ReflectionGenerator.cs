@@ -5,6 +5,7 @@ namespace GBT.BuildTool;
 
 internal static partial class ReflectionGenerator
 {
+    private const uint GeneratedReflectionAbiVersion = 2;
     public static void Generate(string sourceRoot, string outputDir, IReadOnlyCollection<Module> modules)
     {
         var reflectedModules = modules.Select(ScanModule).ToList();
@@ -96,7 +97,7 @@ internal static partial class ReflectionGenerator
             var declaration = TypeDeclarationRegex().Match(text, afterAnnotation);
             if (!declaration.Success)
             {
-                throw new InvalidOperationException($"{header}: GBT_Type must be followed by a class or struct declaration.");
+                throw new InvalidOperationException($"{header}:{CountLines(text, annotation)}: GBT_Type must be followed by a class or struct declaration.");
             }
 
             var bodyStart = declaration.Index + declaration.Length - 1;
@@ -105,7 +106,7 @@ internal static partial class ReflectionGenerator
             var metadataIndex = body.IndexOf("GBT_TypeMetadata", StringComparison.Ordinal);
             if (metadataIndex < 0)
             {
-                throw new InvalidOperationException($"{header}: reflected type '{declaration.Groups["name"].Value}' must contain GBT_TypeMetadata().");
+                throw new InvalidOperationException($"{header}:{CountLines(text, annotation)}: reflected type '{declaration.Groups["name"].Value}' must contain GBT_TypeMetadata().");
             }
 
             var name = declaration.Groups["name"].Value;
@@ -127,7 +128,7 @@ internal static partial class ReflectionGenerator
                 Metadata = ParseMetadata(text[(argumentsStart + 1)..argumentsEnd])
             };
 
-            ScanMembers(header, body, type);
+            ScanMembers(header, body, type, CountLines(text, bodyStart + 1));
             types.Add(type);
             typeIndex = bodyEnd + 1;
         }
@@ -147,7 +148,7 @@ internal static partial class ReflectionGenerator
             var declaration = EnumDeclarationRegex().Match(text, afterAnnotation);
             if (!declaration.Success)
             {
-                throw new InvalidOperationException($"{header}: GBT_Enum must be followed by an enum declaration.");
+                throw new InvalidOperationException($"{header}:{CountLines(text, annotation)}: GBT_Enum must be followed by an enum declaration.");
             }
 
             var bodyStart = declaration.Index + declaration.Length - 1;
@@ -178,26 +179,34 @@ internal static partial class ReflectionGenerator
         return new ReflectedModule(types, enums);
     }
 
-    private static void ScanMembers(string header, string body, ReflectedType type)
+    private static void ScanMembers(string header, string body, ReflectedType type, int bodyStartLine)
     {
-        foreach (Match match in FieldRegex().Matches(body))
+        foreach (var annotation in ScanAnnotations(header, body, bodyStartLine, "GBT_Field", MemberDeclarationKind.Field))
         {
-            var declaration = match.Groups["decl"].Value.Trim();
-            declaration = declaration.Split('=', 2)[0].Trim();
-            var (fieldType, fieldName) = SplitTypeAndName(header, declaration);
+            var declaration = RemoveTopLevelInitializer(annotation.Declaration).Trim();
+            var location = $"{header}:{bodyStartLine + CountLines(body, annotation.Offset) - 1}";
+            var (fieldType, fieldName) = SplitTypeAndName(location, declaration);
             ValidateReflectableType(header, fieldType);
 
             type.Fields.Add(new ReflectedField
             {
                 Name = fieldName,
                 TypeName = NormalizeTypeName(fieldType),
-                Metadata = ParseMetadata(match.Groups["meta"].Value)
+                Metadata = ParseMetadata(annotation.Metadata)
             });
         }
 
-        foreach (Match match in MethodRegex().Matches(body))
+        foreach (var annotation in ScanAnnotations(header, body, bodyStartLine, "GBT_Method", MemberDeclarationKind.Method))
         {
-            var prefix = match.Groups["prefix"].Value.Trim();
+            var declaration = annotation.Declaration.Trim();
+            var parametersStart = FindTopLevelCharacter(declaration, '(');
+            if (parametersStart < 0)
+            {
+                throw AnnotationError(header, body, annotation.Offset, "GBT_Method declaration has no parameter list", bodyStartLine);
+            }
+            var parametersEnd = FindMatchingToken(declaration, parametersStart, '(', ')');
+            var prefix = declaration[..parametersStart].Trim();
+            var suffix = declaration[(parametersEnd + 1)..].Trim();
             var isStatic = false;
             if (prefix.StartsWith("static ", StringComparison.Ordinal))
             {
@@ -206,7 +215,7 @@ internal static partial class ReflectionGenerator
             }
 
             var (returnType, methodName) = SplitTypeAndName(header, prefix);
-            var metadata = ParseMetadata(match.Groups["meta"].Value);
+            var metadata = ParseMetadata(annotation.Metadata);
             isStatic = isStatic || metadata.Any(entry => entry.Key == "Static");
             ValidateReflectableType(header, returnType, allowVoid: true);
 
@@ -215,12 +224,13 @@ internal static partial class ReflectionGenerator
                 Name = methodName,
                 ReflectedName = metadata.FirstOrDefault(entry => entry.Key == "CallName")?.Value ?? methodName,
                 ReturnTypeName = NormalizeTypeName(returnType),
-                IsConst = match.Groups["const"].Success || metadata.Any(entry => entry.Key == "Const"),
+                IsConst = suffix.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("const", StringComparer.Ordinal)
+                    || metadata.Any(entry => entry.Key == "Const"),
                 IsStatic = isStatic,
                 Metadata = metadata
             };
 
-            var parameters = SplitTopLevel(match.Groups["params"].Value, ',');
+            var parameters = SplitTopLevel(declaration[(parametersStart + 1)..parametersEnd], ',');
             for (var i = 0; i < parameters.Count; i++)
             {
                 var parameter = parameters[i].Trim();
@@ -242,6 +252,166 @@ internal static partial class ReflectionGenerator
             type.Methods.Add(method);
         }
     }
+
+    private enum MemberDeclarationKind
+    {
+        Field,
+        Method
+    }
+
+    private sealed record MemberAnnotation(int Offset, string Metadata, string Declaration);
+
+    // Locates annotated declarations with balanced-token scanning. This makes
+    // initializer braces, nested templates, lambdas, strings, and multiline
+    // declarations safe while keeping the later type/name parsing deliberately small.
+    private static List<MemberAnnotation> ScanAnnotations(string header, string body, int bodyStartLine, string marker, MemberDeclarationKind kind)
+    {
+        var result = new List<MemberAnnotation>();
+        var searchIndex = 0;
+        while (true)
+        {
+            var markerIndex = body.IndexOf(marker, searchIndex, StringComparison.Ordinal);
+            if (markerIndex < 0)
+                break;
+            if ((markerIndex > 0 && IsIdentifierCharacter(body[markerIndex - 1]))
+                || (markerIndex + marker.Length < body.Length && IsIdentifierCharacter(body[markerIndex + marker.Length])))
+            {
+                searchIndex = markerIndex + marker.Length;
+                continue;
+            }
+
+            var argumentsStart = SkipWhitespace(body, markerIndex + marker.Length);
+            if (argumentsStart >= body.Length || body[argumentsStart] != '(')
+                throw AnnotationError(header, body, markerIndex, $"{marker} must be followed by metadata parentheses", bodyStartLine);
+            var argumentsEnd = FindMatchingToken(body, argumentsStart, '(', ')');
+            var declarationStart = SkipWhitespace(body, argumentsEnd + 1);
+            var declarationEnd = FindMemberDeclarationEnd(header, body, markerIndex, declarationStart, kind, bodyStartLine);
+            result.Add(new MemberAnnotation(markerIndex,
+                body[(argumentsStart + 1)..argumentsEnd], body[declarationStart..declarationEnd]));
+            searchIndex = declarationEnd + 1;
+        }
+        return result;
+    }
+
+    private static int FindMemberDeclarationEnd(string header, string text, int annotationOffset, int start,
+        MemberDeclarationKind kind, int bodyStartLine)
+    {
+        var paren = 0;
+        var brace = 0;
+        var bracket = 0;
+        var quote = '\0';
+        var escaped = false;
+        for (var index = start; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (quote != '\0')
+            {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = '\0';
+                continue;
+            }
+            if (character is '\'' or '"') { quote = character; continue; }
+            switch (character)
+            {
+                case '(': paren++; break;
+                case ')': paren--; break;
+                case '[': bracket++; break;
+                case ']': bracket--; break;
+                case '{':
+                    if (kind == MemberDeclarationKind.Method && paren == 0 && bracket == 0 && brace == 0)
+                        return index;
+                    brace++;
+                    break;
+                case '}':
+                    if (brace > 0) brace--;
+                    else throw AnnotationError(header, text, annotationOffset, "reflected member declaration has no top-level terminator", bodyStartLine);
+                    break;
+                case ';':
+                    if (paren == 0 && brace == 0 && bracket == 0)
+                        return index;
+                    break;
+            }
+            if (paren < 0 || brace < 0 || bracket < 0)
+                throw AnnotationError(header, text, annotationOffset, "unbalanced reflected member declaration", bodyStartLine);
+        }
+        throw AnnotationError(header, text, annotationOffset, "reflected member declaration has no top-level terminator", bodyStartLine);
+    }
+
+    private static string RemoveTopLevelInitializer(string declaration)
+    {
+        var equals = FindTopLevelCharacter(declaration, '=');
+        return equals < 0 ? declaration : declaration[..equals];
+    }
+
+    private static int FindTopLevelCharacter(string text, char target)
+    {
+        var paren = 0;
+        var brace = 0;
+        var bracket = 0;
+        var angle = 0;
+        var quote = '\0';
+        var escaped = false;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (quote != '\0')
+            {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = '\0';
+                continue;
+            }
+            if (character is '\'' or '"') { quote = character; continue; }
+            if (character == target && paren == 0 && brace == 0 && bracket == 0 && angle == 0)
+                return index;
+            switch (character)
+            {
+                case '(': paren++; break;
+                case ')': paren--; break;
+                case '{': brace++; break;
+                case '}': brace--; break;
+                case '[': bracket++; break;
+                case ']': bracket--; break;
+                case '<': angle++; break;
+                case '>': if (angle > 0) angle--; break;
+            }
+        }
+        return -1;
+    }
+
+    private static int FindMatchingToken(string text, int openIndex, char open, char close)
+    {
+        var depth = 0;
+        var quote = '\0';
+        var escaped = false;
+        for (var index = openIndex; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (quote != '\0')
+            {
+                if (escaped) escaped = false;
+                else if (character == '\\') escaped = true;
+                else if (character == quote) quote = '\0';
+                continue;
+            }
+            if (character is '\'' or '"') { quote = character; continue; }
+            if (character == open) depth++;
+            else if (character == close && --depth == 0) return index;
+        }
+        throw new InvalidOperationException($"Could not find matching '{close}'.");
+    }
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index])) index++;
+        return index;
+    }
+
+    private static bool IsIdentifierCharacter(char value) => char.IsLetterOrDigit(value) || value == '_';
+
+    private static InvalidOperationException AnnotationError(string header, string text, int offset, string message, int startLine)
+        => new($"{header}:{startLine + CountLines(text, offset) - 1}: {message}.");
 
     private static void ScanEnumValues(string header, string body, ReflectedEnum enumInfo)
     {
@@ -333,6 +503,7 @@ internal static partial class ReflectionGenerator
         var builder = new StringBuilder();
         builder.AppendLine("// Generated by GBT. Do not edit.");
         builder.AppendLine("#include \"Object/ReflectionRegistry.h\"");
+        builder.AppendLine($"static_assert(::GBT::ReflectionAbiVersion == {GeneratedReflectionAbiVersion}, \"Regenerate reflection metadata with the matching GBT version.\");");
         builder.AppendLine();
 
         foreach (var include in types.Select(type => type.SourceFile)
@@ -497,6 +668,7 @@ internal static partial class ReflectionGenerator
         builder.AppendLine($"            Field.TypeName = \"{field.TypeName}\";");
         builder.AppendLine($"            Field.TypeId = typeid(decltype({type.QualifiedName}::{field.Name}));");
         builder.AppendLine($"            Field.SetEnumValue = MakeEnumValueSetter<decltype({type.QualifiedName}::{field.Name})>();");
+        builder.AppendLine($"            Field.ValueType = MakeValueTypeInfo<decltype({type.QualifiedName}::{field.Name})>();");
         builder.AppendLine($"            Field.Flags = FieldFlags::{(readOnly ? "ReadOnly" : "ReadWrite")};");
         AppendMetadata(builder, "Field.Metadata", field.Metadata, 3);
         builder.AppendLine($"            Field.AddressGetter = [](const void* Instance) -> const void* {{ return &static_cast<const {type.QualifiedName}*>(Instance)->{field.Name}; }};");
@@ -598,6 +770,7 @@ internal static partial class ReflectionGenerator
         var builder = new StringBuilder();
         builder.AppendLine("// Generated by GBT. Do not edit.");
         builder.AppendLine("#include \"Object/ReflectionRegistry.h\"");
+        builder.AppendLine($"static_assert(::GBT::ReflectionAbiVersion == {GeneratedReflectionAbiVersion}, \"Regenerate reflection metadata with the matching GBT version.\");");
         builder.AppendLine();
         builder.AppendLine("namespace GBT::Generated");
         builder.AppendLine("{");
@@ -698,51 +871,63 @@ internal static partial class ReflectionGenerator
             knownTypes.Add(enumInfo.QualifiedName);
         }
 
+        var ambiguousNames = types.Select(type => (type.Name, type.QualifiedName))
+            .Concat(enums.Select(enumInfo => (enumInfo.Name, enumInfo.QualifiedName)))
+            .GroupBy(entry => entry.Name, StringComparer.Ordinal)
+            .Where(group => group.Select(entry => entry.QualifiedName).Distinct(StringComparer.Ordinal).Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
         foreach (var type in types)
         {
             foreach (var field in type.Fields)
             {
-                EnsureReflectableType(type.SourceFile, field.TypeName, knownTypes);
+                EnsureReflectableType(type.SourceFile, field.TypeName, knownTypes, ambiguousNames);
             }
 
             foreach (var method in type.Methods)
             {
-                EnsureReflectableType(type.SourceFile, method.ReturnTypeName, knownTypes, allowVoid: true);
+                EnsureReflectableType(type.SourceFile, method.ReturnTypeName, knownTypes, ambiguousNames, allowVoid: true);
                 foreach (var parameter in method.Parameters)
                 {
-                    EnsureReflectableType(type.SourceFile, parameter.TypeName, knownTypes);
+                    EnsureReflectableType(type.SourceFile, parameter.TypeName, knownTypes, ambiguousNames);
                 }
             }
         }
     }
 
-    private static void EnsureReflectableType(string sourceFile, string typeName, IReadOnlySet<string> knownTypes, bool allowVoid = false)
+    private static void EnsureReflectableType(string sourceFile, string typeName, IReadOnlySet<string> knownTypes,
+        IReadOnlySet<string> ambiguousNames, bool allowVoid = false)
     {
         var normalized = NormalizeTypeName(typeName);
+        var inspectable = normalized;
+        if (inspectable.StartsWith("const ", StringComparison.Ordinal))
+            inspectable = inspectable["const ".Length..].Trim();
+        inspectable = inspectable.TrimEnd('&').Trim();
         if (allowVoid && normalized == "void")
         {
             return;
         }
 
-        if (KnownTypeRegex().IsMatch(normalized)
-            || normalized is "String" or "StringView" or "std::string" or "std::string_view" or "const char*")
+        if (KnownTypeRegex().IsMatch(inspectable)
+            || inspectable is "String" or "StringView" or "std::string" or "std::string_view" or "const char*")
         {
             return;
         }
 
-        if (TryGetTemplateArgument(normalized, "RefPtr", out var refPtrArgument))
+        if (TryGetTemplateArgument(inspectable, "RefPtr", out var refPtrArgument))
         {
-            EnsureReflectableType(sourceFile, refPtrArgument, knownTypes);
+            EnsureReflectableType(sourceFile, refPtrArgument, knownTypes, ambiguousNames);
             return;
         }
 
-        if (TryGetTemplateArgument(normalized, "std::vector", out var vectorArgument))
+        if (TryGetTemplateArgument(inspectable, "std::vector", out var vectorArgument))
         {
-            EnsureReflectableType(sourceFile, vectorArgument, knownTypes);
+            EnsureReflectableType(sourceFile, vectorArgument, knownTypes, ambiguousNames);
             return;
         }
 
-        if (TryGetTemplateArgument(normalized, "std::unordered_map", out var mapArguments))
+        if (TryGetTemplateArgument(inspectable, "std::unordered_map", out var mapArguments))
         {
             var arguments = SplitTopLevel(mapArguments, ',');
             if (arguments.Count != 2)
@@ -750,8 +935,8 @@ internal static partial class ReflectionGenerator
                 throw new InvalidOperationException($"{sourceFile}: reflected unordered_map type must have exactly two template arguments: '{typeName}'.");
             }
 
-            EnsureReflectableType(sourceFile, arguments[0], knownTypes);
-            EnsureReflectableType(sourceFile, arguments[1], knownTypes);
+            EnsureReflectableType(sourceFile, arguments[0], knownTypes, ambiguousNames);
+            EnsureReflectableType(sourceFile, arguments[1], knownTypes, ambiguousNames);
             return;
         }
 
@@ -762,6 +947,10 @@ internal static partial class ReflectionGenerator
         }
 
         unwrapped = unwrapped.TrimEnd('*', '&').Trim();
+        if (!unwrapped.Contains("::", StringComparison.Ordinal) && ambiguousNames.Contains(unwrapped))
+        {
+            throw new InvalidOperationException($"{sourceFile}: reflected type name '{typeName}' is ambiguous; use its qualified C++ name.");
+        }
         if (knownTypes.Contains(unwrapped))
         {
             return;
@@ -938,15 +1127,6 @@ internal static partial class ReflectionGenerator
 
     [GeneratedRegex(@"\G\s*enum(?:\s+class)?\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*(?<underlying>[^\{]+))?\s*\{", RegexOptions.Singleline)]
     private static partial Regex EnumDeclarationRegex();
-
-    // A field's default initializer may contain aggregate braces. The declaration
-    // is trimmed at '=' by ScanMembers, so retain the initializer here only to
-    // find the terminating semicolon and preserve the reflected field itself.
-    [GeneratedRegex(@"GBT_Field\s*\((?<meta>[^\)]*)\)\s*(?<decl>[^;]+);", RegexOptions.Singleline)]
-    private static partial Regex FieldRegex();
-
-    [GeneratedRegex(@"GBT_Method\s*\((?<meta>[^\)]*)\)\s*(?<prefix>[^\(\);{}]+?)\s*\((?<params>[^\)]*)\)\s*(?<const>const)?\s*(?:;|\{)", RegexOptions.Singleline)]
-    private static partial Regex MethodRegex();
 
     [GeneratedRegex(@"^GBT_EnumValue\s*\((?<meta>[^\)]*)\)\s*(?<decl>.+)$", RegexOptions.Singleline)]
     private static partial Regex EnumValueRegex();

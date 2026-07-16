@@ -8,6 +8,10 @@ var options = CommandLineOptions.Parse(args);
 
 switch (options.Mode)
 {
+    case "self-test":
+        ReflectionGeneratorTests.Run();
+        ModuleTomlTests.Run();
+        break;
     case "manifest":
         Generate(options.SourceRoot, options.OutputDir, GetRequestedPlatform(options));
         break;
@@ -77,43 +81,31 @@ static ModulePlatforms GetRequestedPlatform(CommandLineOptions options)
 
 static List<BuildModule> DiscoverModules(string sourceRoot, string outputDir, ModulePlatforms platform)
 {
-    var roots = new[]
-        {
-            Path.Combine(sourceRoot, "Source"),
-            Path.Combine(sourceRoot, "Games"),
-            Path.Combine(sourceRoot, "Shaders"),
-            Path.Combine(CommandLineOptions.CurrentToolRoot, "Source")
-        }
-        .Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root))
+    _ = outputDir;
+    var manifestPath = Path.Combine(sourceRoot, "GBTProject.toml");
+    if (!File.Exists(manifestPath))
+        throw new InvalidOperationException($"Could not find GBT project manifest '{manifestPath}'.");
+    var manifest = ModuleToml.ReadProject(manifestPath);
+    var roots = manifest.ModuleRoots
+        .Select(root => Path.GetFullPath(Path.Combine(sourceRoot, root)))
         .Distinct(StringComparer.Ordinal)
         .ToArray();
+    foreach (var root in roots)
+    {
+        if (!Directory.Exists(root))
+            throw new InvalidOperationException($"{manifestPath}: module root '{root}' does not exist.");
+    }
 
-    var moduleFiles = roots
-        .SelectMany(root => Directory.EnumerateFiles(root, "*.GBTModule.cs", SearchOption.AllDirectories))
+    var modules = roots
+        .SelectMany(root => Directory.EnumerateFiles(root, "*.GBTModule.toml", SearchOption.AllDirectories))
         .Distinct(StringComparer.Ordinal)
-        .GroupBy(path => Path.GetFileName(path).Replace(".GBTModule.cs", "", StringComparison.Ordinal), StringComparer.Ordinal)
-        .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        .Select(ModuleToml.ReadModule)
+        .ToList();
+    var duplicate = modules.GroupBy(module => module.Name, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1);
+    if (duplicate is not null)
+        throw new InvalidOperationException($"Duplicate module name '{duplicate.Key}': {string.Join(", ", duplicate.Select(module => module.SourceFile))}");
 
-    return System.Reflection.Assembly.GetExecutingAssembly()
-        .GetTypes()
-        .Where(type => !type.IsAbstract && typeof(BuildModule).IsAssignableFrom(type))
-        .Select(type =>
-        {
-            var grapesModule = (BuildModule)Activator.CreateInstance(type)!;
-
-            if (!moduleFiles.TryGetValue(grapesModule.Name, out var files))
-            {
-                throw new InvalidOperationException($"Could not find source file for module '{grapesModule.Name}'. Expected '{grapesModule.Name}.GBTModule.cs'.");
-            }
-
-            if (files.Length != 1)
-            {
-                throw new InvalidOperationException($"Module '{grapesModule.Name}' matches multiple source files: {string.Join(", ", files)}");
-            }
-
-            grapesModule.SetSourceFile(files[0]);
-            return grapesModule;
-        })
+    return modules
         .Where(grapesModule => grapesModule.IsEnabled(platform))
         .OrderBy(grapesModule => grapesModule.Name, StringComparer.Ordinal)
         .ToList();

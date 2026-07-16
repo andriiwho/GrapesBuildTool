@@ -1,0 +1,5 @@
+SchemaVersion = 1
+
+[Project]
+Name = "GrapesBuildTool"
+ModuleRoots = ["Source"]

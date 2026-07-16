@@ -15,6 +15,21 @@
 namespace GBT
 {
     class Object;
+    struct TypeInfo;
+
+    // Incremented whenever generated metadata and the runtime registry contract
+    // change incompatibly. Generated sources assert this value at compile time.
+    inline constexpr UInt32 ReflectionAbiVersion = 2;
+
+    // Describes how generic consumers may safely interpret a reflected value.
+    enum class ValueKind
+    {
+        Unknown,
+        Primitive,
+        Enum,
+        Reflected,
+        Sequence
+    };
 
     enum class TypeDeclarationKind
     {
@@ -61,6 +76,30 @@ namespace GBT
     using EnumValueSetter = std::function<void(void*, SInt64)>;
     using MethodInvoker = std::function<void(void*, void*, std::span<void*>)>;
     using ObjectFactory = std::function<RefPtr<Object>()>;
+    using ReflectedTypeGetter = std::function<const TypeInfo*()>;
+
+    // Type-erased operations for contiguous or proxy-backed sequence fields.
+    // Element address callbacks may be empty for proxy containers such as
+    // std::vector<bool>; Size and Resize remain available in that case.
+    struct SequenceOperations
+    {
+        std::type_index ElementTypeId = typeid(void);
+        ValueKind ElementKind = ValueKind::Unknown;
+        std::function<USize(const void*)> Size;
+        std::function<void(void*, USize)> Resize;
+        std::function<const void*(const void*, USize)> ElementAddress;
+        std::function<void*(void*, USize)> MutableElementAddress;
+        ReflectedTypeGetter ElementReflectedType;
+    };
+
+    // Runtime classification and operations for one native C++ value type.
+    struct ValueTypeInfo
+    {
+        ValueKind Kind = ValueKind::Unknown;
+        std::type_index TypeId = typeid(void);
+        ReflectedTypeGetter ReflectedType;
+        SequenceOperations Sequence;
+    };
 
     struct EnumValueInfo
     {
@@ -98,6 +137,7 @@ namespace GBT
         FieldMutableAddressGetter MutableAddressGetter;
         // Present only for enum fields; writes a reflected integral enum value.
         EnumValueSetter SetEnumValue;
+        ValueTypeInfo ValueType;
 
         const void* GetAddress(const void* Instance) const
         {
@@ -124,6 +164,64 @@ namespace GBT
         bool CanRead() const { return static_cast<bool>(AddressGetter); }
         bool CanWrite() const { return static_cast<bool>(MutableAddressGetter); }
     };
+
+    template <typename T>
+    struct IsStdVector : std::false_type
+    {
+    };
+
+    template <typename T, typename TAllocator>
+    struct IsStdVector<std::vector<T, TAllocator>> : std::true_type
+    {
+        using ElementType = T;
+    };
+
+    template <typename T>
+    constexpr ValueKind GetValueKind()
+    {
+        using TValue = std::remove_cvref_t<T>;
+        if constexpr (IsStdVector<TValue>::value)
+            return ValueKind::Sequence;
+        else if constexpr (std::is_enum_v<TValue>)
+            return ValueKind::Enum;
+        else if constexpr (requires { TValue::GetStaticType(); })
+            return ValueKind::Reflected;
+        else if constexpr (std::is_arithmetic_v<TValue> || std::is_same_v<TValue, String>)
+            return ValueKind::Primitive;
+        else
+            return ValueKind::Unknown;
+    }
+
+    template <typename T>
+    ValueTypeInfo MakeValueTypeInfo()
+    {
+        using TValue = std::remove_cvref_t<T>;
+        ValueTypeInfo Info;
+        Info.Kind = GetValueKind<TValue>();
+        Info.TypeId = typeid(TValue);
+        if constexpr (requires { TValue::GetStaticType(); })
+        {
+            Info.ReflectedType = [] { return TValue::GetStaticType(); };
+        }
+        if constexpr (IsStdVector<TValue>::value)
+        {
+            using TElement = typename IsStdVector<TValue>::ElementType;
+            Info.Sequence.ElementTypeId = typeid(TElement);
+            Info.Sequence.ElementKind = GetValueKind<TElement>();
+            Info.Sequence.Size = [](const void* Value) { return static_cast<USize>(static_cast<const TValue*>(Value)->size()); };
+            Info.Sequence.Resize = [](void* Value, USize Size) { static_cast<TValue*>(Value)->resize(Size); };
+            if constexpr (!std::is_same_v<TElement, bool>)
+            {
+                Info.Sequence.ElementAddress = [](const void* Value, USize Index) -> const void* { return &(*static_cast<const TValue*>(Value))[Index]; };
+                Info.Sequence.MutableElementAddress = [](void* Value, USize Index) -> void* { return &(*static_cast<TValue*>(Value))[Index]; };
+            }
+            if constexpr (requires { TElement::GetStaticType(); })
+            {
+                Info.Sequence.ElementReflectedType = [] { return TElement::GetStaticType(); };
+            }
+        }
+        return Info;
+    }
 
     template <typename T>
     EnumValueSetter MakeEnumValueSetter()
@@ -161,6 +259,7 @@ namespace GBT
 
     struct TypeInfo
     {
+        UInt32 AbiVersion = ReflectionAbiVersion;
         String Name;
         String QualifiedName;
         String ModuleName;
@@ -183,6 +282,7 @@ namespace GBT
 
     struct EnumInfo
     {
+        UInt32 AbiVersion = ReflectionAbiVersion;
         String Name;
         String QualifiedName;
         String ModuleName;
@@ -247,6 +347,10 @@ namespace GBT
         std::vector<EnumInfo> Enums;
         std::unordered_map<String, USize> TypeIndices;
         std::unordered_map<String, USize> EnumIndices;
+        std::unordered_map<String, USize> TypeNameIndices;
+        std::unordered_map<String, USize> EnumNameIndices;
+        std::unordered_map<String, bool> AmbiguousTypeNames;
+        std::unordered_map<String, bool> AmbiguousEnumNames;
         std::unordered_map<std::type_index, USize> EnumTypeIndices;
     };
 

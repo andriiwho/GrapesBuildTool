@@ -68,6 +68,19 @@ function(GBT_RunBuildTool Mode)
 endfunction()
 
 function(GBT_PrepareProject)
+    file(GLOB_RECURSE GBT_ModuleManifestInputs CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/*.GBTModule.toml"
+    )
+    file(GLOB_RECURSE GBT_BuildToolSourceInputs CONFIGURE_DEPENDS
+            "${GBT_Root}/Tools/GBT/*.cs"
+            "${GBT_Root}/Tools/GBT/*.csproj"
+    )
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/GBTProject.toml"
+            ${GBT_ModuleManifestInputs}
+            ${GBT_BuildToolSourceInputs}
+    )
+
     if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         set(CMAKE_TOOLCHAIN_FILE "${GBT_Root}/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "GBT bundled vcpkg toolchain" FORCE)
     endif()
